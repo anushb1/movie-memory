@@ -213,9 +213,9 @@ The dashboard shows which path served the fact ("Freshly generated", "Cached…"
 
 ## Why Variant A
 
-- The base app's most interesting correctness problem is on the backend: an AI call that is slow, costs money, can fail, and can be triggered concurrently. Variant A asks for exactly that: caching, concurrency, and failure handling.
-- It's testable end-to-end against a real database with a mocked model, so the guarantees (one call per burst, no cross-user access) are proven by tests rather than asserted.
-- I wanted to go deep on one variant rather than shallow on both, per the brief.
+I chose Variant A because it's backend-focused, and backend work is what I enjoy most.
+
+It also targets the most interesting problem in this app: the AI call is slow, costs money, can fail, and can be triggered several times at once. Variant A is about handling exactly that (caching, concurrency, failure handling), and those guarantees can be proven with backend tests against a real database.
 
 I did add one small extra outside the variant: a simple **inline edit** of the favorite movie (server-validated with the same schema), because it makes the cache-key design visible and testing different movies easier. Variant B's optimistic UI, typed client, and client-side cache are intentionally out of scope.
 
