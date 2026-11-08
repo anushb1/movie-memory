@@ -6,20 +6,141 @@ Sign in with Google, save your favorite movie, and get an AI-generated fun fact 
 
 **Variant chosen: A (Backend: caching & correctness).** See [Why Variant A](#why-variant-a).
 
+![Dashboard showing a freshly generated fun fact](docs/screenshots/04-dashboard-generated.png)
+
 ---
 
 ## Contents
 
-1. [Setup](#setup)
-2. [Environment variables](#environment-variables)
-3. [Database & migrations](#database--migrations)
-4. [Running tests](#running-tests)
-5. [Architecture overview](#architecture-overview)
-6. [Variant A: how fact caching works](#variant-a-how-fact-caching-works)
-7. [Why Variant A](#why-variant-a)
-8. [Key tradeoffs](#key-tradeoffs)
-9. [With 2 more hours](#with-2-more-hours)
-10. [AI usage](#ai-usage)
+1. [Requirements walkthrough](#requirements-walkthrough) (every requirement in the brief, with proof)
+2. [Edge cases handled](#edge-cases-handled)
+3. [Setup](#setup)
+4. [Environment variables](#environment-variables)
+5. [Database & migrations](#database--migrations)
+6. [Running tests](#running-tests)
+7. [Architecture overview](#architecture-overview)
+8. [Variant A: how fact caching works](#variant-a-how-fact-caching-works)
+9. [Why Variant A](#why-variant-a)
+10. [Key tradeoffs](#key-tradeoffs)
+11. [With 2 more hours](#with-2-more-hours)
+12. [AI usage](#ai-usage)
+
+---
+
+## Requirements walkthrough
+
+Each requirement from the brief, where it's implemented, and how it's verified.
+
+### 1. Authentication
+
+> *Visiting `/` while unauthenticated shows a landing page with "Sign in with Google". After login, first-time users go to onboarding; returning users go to the dashboard.*
+
+![Landing page](docs/screenshots/01-landing.webp)
+
+| | |
+|---|---|
+| **Where** | [`src/app/page.tsx`](src/app/page.tsx) (landing), [`src/auth.ts`](src/auth.ts) (Auth.js + Google), [`src/lib/session.ts`](src/lib/session.ts) (`homeFor`) |
+| **How** | After Google redirects back, `homeFor(user)` routes on *"does this user have a favorite movie?"*: no → `/onboarding`, yes → `/dashboard`. A user who signed in but abandoned onboarding is correctly sent back to it. |
+| **Logged-out guard** | `/dashboard` and `/onboarding` call `getCurrentUser()` server-side and `redirect("/")` when there's no session. |
+
+### 2. Onboarding (first time only)
+
+> *Prompt for favorite movie. Server-side validation (trim, min/max length). Store in Postgres, associated with the user.*
+
+| First visit | Submitting only spaces |
+|---|---|
+| ![Onboarding form](docs/screenshots/02-onboarding.jpg) | ![Server-side validation error](docs/screenshots/03-validation-error.jpg) |
+
+| | |
+|---|---|
+| **Where** | [`src/app/onboarding/actions.ts`](src/app/onboarding/actions.ts) (server action), [`src/lib/validation.ts`](src/lib/validation.ts) (`movieSchema`) |
+| **Validation** | Trim, collapse inner whitespace, then require 1–100 characters, all on the server. The input's `maxLength` is only a UX hint. |
+| **First-time only** | The page redirects users who already have a movie, and the write is `updateMany({ where: { id, favoriteMovie: null } })`, so even a replayed request can't overwrite a movie via onboarding. |
+| **Tests** | [`validation.test.ts`](src/lib/__tests__/validation.test.ts): trimming, empty, whitespace-only, missing field, 100 vs 101 chars. |
+
+### 3. Dashboard
+
+> *Show name, email, photo (if available), favorite movie (from DB), and a logout button.*
+
+![Dashboard](docs/screenshots/04-dashboard-generated.png)
+
+| | |
+|---|---|
+| **Where** | [`src/app/dashboard/page.tsx`](src/app/dashboard/page.tsx) |
+| **Missing name/photo** | No photo → initial-letter avatar; no name → falls back to email, then "Movie fan". |
+| **Logout** | Server action calling `signOut()`, which deletes the `Session` row (server-side revocation) and clears the cookie. |
+
+### 4. Fact generation (base) and Variant A cache
+
+> *Display a fun fact using OpenAI and store generated facts. Variant A: reuse a fact under 60 seconds old, otherwise generate a new one.*
+
+| Right after generating | Refreshing within 60s: served from cache |
+|---|---|
+| ![Freshly generated](docs/screenshots/04-dashboard-generated.png) | ![Cached](docs/screenshots/05-dashboard-cached.png) |
+
+The pill under each fact shows which path served it: **Freshly generated**, **Cached · new fact after 60s**, or **AI unavailable · showing your latest fact**. The **Refresh** button asks the server again; the server alone decides whether to reuse or regenerate.
+
+| | |
+|---|---|
+| **Where** | [`src/lib/facts.ts`](src/lib/facts.ts) (`getOrCreateFact`), [`src/app/dashboard/FunFact.tsx`](src/app/dashboard/FunFact.tsx), [`src/app/api/fact/route.ts`](src/app/api/fact/route.ts) |
+| **Storage** | Every fact is a `Fact` row with `userId`, `movie`, `content`, `createdAt`. |
+| **Tests** | [`facts.test.ts`](src/lib/__tests__/facts.test.ts): fresh at 59.999s, stale at exactly 60s; reuse under 60s; regenerate after; movie change = cache miss. |
+
+### 5. Variant A: burst / idempotency protection
+
+> *Prevent multiple new facts from being generated simultaneously (quick refreshes, multiple tabs).*
+
+| | |
+|---|---|
+| **Approach** | DB transaction guard: a Postgres advisory lock per `(user, movie)` plus a second cache check inside the lock (see [diagram](#variant-a-how-fact-caching-works)). |
+| **Proof** | Test fires 5 simultaneous requests at a deliberately slow mocked model → exactly **1** model call and **1** stored fact. Removing the lock makes this test fail with 5 calls. |
+| **Live check** | 5 parallel `curl` requests to `GET /api/fact` → 1 `generated` + 4 `cache`, 1 row in the database. |
+
+### 6. Variant A: failure handling
+
+> *If OpenAI fails, return the most recent cached fact if one exists, otherwise a user-friendly error.*
+
+| | |
+|---|---|
+| **Where** | `getOrCreateFact` → `catch` branch; `FactUnavailableError` → HTTP 503 in the route, friendly message on the dashboard |
+| **Tests** | Falls back to the newest saved fact; friendly error when none; empty model reply treated as a failure (never stored). |
+
+### 7. Editing the movie (small extra, outside the variant)
+
+| Editing | After saving: the cache key changed, so a new fact is generated |
+|---|---|
+| ![Editing the movie](docs/screenshots/06-edit-movie.png) | ![New fact after edit](docs/screenshots/07-after-edit.png) |
+
+Same server-side `movieSchema` as onboarding. No cache-invalidation code is needed: facts are cached per `(user, movie)`, so a new movie has no fresh fact yet.
+
+### 8. Security & correctness (applies to all)
+
+| Requirement | How it's met | Verified by |
+|---|---|---|
+| Validate movie input server-side | Shared zod schema in both server actions | `validation.test.ts`, screenshot above |
+| Users can't access or modify others' data | User id only from the session; every query filtered by it; `GET /api/fact` accepts no user parameter | `facts.test.ts` + `route.test.ts` authorization tests |
+| Don't expose secrets to the client | No `NEXT_PUBLIC_` variables; `import "server-only"` in `openai.ts` / `facts.ts` breaks the build if imported client-side | Build-time guarantee |
+| Handle missing Google photo or name | Initial avatar, name → email → "Movie fan" fallback | Rendered with a photo-less test user |
+
+---
+
+## Edge cases handled
+
+| Situation | What happens |
+|---|---|
+| Movie typed with extra spaces (`"  The   Matrix "`) | Stored as `The Matrix`, so it's the same cache key as a clean entry |
+| Only spaces, or empty | Rejected on the server with "Please enter a movie title." |
+| 101+ characters | Rejected on the server (length measured *after* trimming) |
+| User signs in but closes the tab before onboarding | Next visit sends them back to onboarding, not an empty dashboard |
+| Onboarding request replayed after a movie is set | No-op: the write only applies where `favoriteMovie IS NULL` |
+| Logged out and visiting `/dashboard` or `/onboarding` | Redirected to `/`; `GET /api/fact` returns 401 |
+| Google account with no photo or no name | Initial-letter avatar; name falls back to email |
+| Refreshing within 60s / several tabs at once | One model call; the rest are served from cache |
+| OpenAI timeout, error, or empty reply | Newest saved fact for this user + movie (any age); otherwise a friendly message / 503 |
+| OpenAI down and only *another user* has a fact | Friendly error, never another user's fact |
+| User changes their movie | Next request is a cache miss, so a fact about the new movie is generated |
+| Movie title containing instructions ("ignore your rules…") | Sent only as the user message; the system prompt treats it as a title |
+| Server crashes while holding the lock | Postgres releases transaction-scoped advisory locks automatically |
 
 ---
 
@@ -182,19 +303,42 @@ The session lives in Postgres; the cookie holds only a random token. Logging out
 
 `src/lib/facts.ts → getOrCreateFact(userId)`
 
+```mermaid
+flowchart TD
+    A([Request for a fact]) --> B{Newest fact for<br/>user + movie<br/>under 60s old?}
+    B -- yes --> C[Return it<br/><b>cache</b>]
+    B -- no --> D[Take Postgres advisory lock<br/>for user + movie]
+    D --> E{Check again:<br/>fresh now?}
+    E -- "yes: a concurrent request just made one" --> C
+    E -- no --> F[Call OpenAI<br/>10s timeout, 1 retry]
+    F -- ok --> G[Insert fact, return it<br/><b>generated</b>]
+    F -- "error / timeout / empty" --> H{Any saved fact for<br/>user + movie?}
+    H -- yes --> I[Return newest one<br/><b>fallback</b>]
+    H -- no --> J[FactUnavailableError<br/>friendly message / HTTP 503]
+    G -.-> K([Transaction ends:<br/>lock released automatically])
+    I -.-> K
+    J -.-> K
 ```
-newest fact for (user, movie) < 60s old? ──yes──► return it            [cache]
-        │ no
-🔒 pg_advisory_xact_lock(hash(user), hash(movie))
-        │
-check again: fresh now? ──yes──► return it                              [cache]
-        │ no
-call OpenAI ──ok──► insert fact ──► return it                           [generated]
-        │ error / timeout / empty reply
-newest saved fact for (user, movie), any age? ──yes──► return it        [fallback]
-        │ no
-FactUnavailableError → friendly message (HTTP 503 from /api/fact)
-🔓 lock released automatically when the transaction ends
+
+**Five tabs at once:**
+
+```mermaid
+sequenceDiagram
+    participant T1 as Tab 1
+    participant T2 as Tabs 2–5
+    participant DB as Postgres
+    participant AI as OpenAI
+    T1->>DB: cache check (empty)
+    T2->>DB: cache check (empty)
+    T1->>DB: take lock (user, movie)
+    T2->>DB: take lock: waits
+    T1->>DB: check again (still empty)
+    T1->>AI: generate fact
+    AI-->>T1: fact
+    T1->>DB: insert fact, commit, lock released
+    DB-->>T2: lock acquired (one at a time)
+    T2->>DB: check again: fresh fact found
+    Note over T2: return cached fact, no AI call
 ```
 
 **1. 60-second window.** The `Fact` table *is* the cache: the newest row for `(userId, movie)` is the cached value and its `createdAt` is its age. `isFresh()` is a pure function (`now − createdAt < 60_000`) so the boundary is unit-tested without real waiting.
@@ -231,7 +375,7 @@ I did add one small extra outside the variant: a simple **inline edit** of the f
 | Per-user facts | Clean authorization; matches the spec | Two users with the same movie each pay for a generation |
 | Database sessions | Instant server-side revocation on logout | One DB lookup per authenticated request |
 | Redirects in server components, not middleware | Can read `favoriteMovie` from the DB (Prisma doesn't run in the Edge runtime) | Each protected page must call the check (centralized in `getCurrentUser` / `homeFor`) |
-| Fact rendered in a server component | No client fetch code; fact streams via `<Suspense>` | Getting a "new" fact means a page refresh (fine given the 60s window) |
+| Fact rendered in a server component | No client fetch code; fact streams via `<Suspense>` | The Refresh button re-renders server components (`router.refresh()`) rather than calling `/api/fact`, so the dashboard and the API share logic but not a code path |
 
 ---
 
@@ -242,7 +386,7 @@ I did add one small extra outside the variant: a simple **inline edit** of the f
 3. **Rate limiting** per user on fact generation (beyond the 60s window) to cap spend from scripted abuse.
 4. **End-to-end test** of the auth → onboarding → dashboard flow with Playwright, using a seeded session.
 5. **Structured logging + metrics** for cache hit rate, generation latency, and fallback frequency.
-6. **Explicit "new fact" button** that bypasses the client's refresh, plus showing the fact's age.
+6. **Show the fact's age** ("generated 23s ago") and a countdown until a new fact is available.
 7. **CI** (GitHub Actions with a Postgres service) running lint, typecheck, and tests on every push.
 
 ---

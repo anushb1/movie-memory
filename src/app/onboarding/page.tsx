@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/session";
+import { Blobs, Logo } from "@/components/Brand";
 import { MovieForm } from "./MovieForm";
 
 export default async function OnboardingPage() {
@@ -11,13 +12,17 @@ export default async function OnboardingPage() {
   const firstName = user.name?.split(" ")[0];
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-50 px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-sm ring-1 ring-zinc-200">
-        <h1 className="text-xl font-semibold text-zinc-900">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-violet-700 via-purple-700 to-indigo-800 px-4 py-12">
+      <Blobs />
+      <div className="animate-pop relative w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl shadow-purple-950/40 sm:p-10">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-600 text-white">
+          <Logo className="h-7 w-7" />
+        </div>
+        <h1 className="mt-6 text-2xl font-bold tracking-tight text-zinc-900">
           Welcome to Movie Memory{firstName ? `, ${firstName}` : ""}!
         </h1>
-        <p className="mt-2 text-sm text-zinc-600">
-          Tell us one movie and we&apos;ll keep it, plus a fun fact about it.
+        <p className="mt-2 text-zinc-600">
+          One question to get started. You can change it later.
         </p>
         <MovieForm />
       </div>

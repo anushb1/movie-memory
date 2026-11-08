@@ -20,21 +20,23 @@ export function EditMovie({ movie }: { movie: string }) {
 
   if (!editing) {
     return (
-      <div className="mt-1 flex items-center gap-3">
-        <p className="text-lg font-medium text-zinc-900">{movie}</p>
+      <div className="animate-fade-in">
+        <p className="mt-3 break-words text-3xl font-bold leading-tight tracking-tight text-zinc-900">
+          {movie}
+        </p>
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="rounded-md px-2 py-1 text-xs font-medium text-zinc-600 ring-1 ring-zinc-300 hover:bg-zinc-100"
+          className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 ring-1 ring-violet-200 transition hover:-translate-y-0.5 hover:bg-violet-100 active:scale-95"
         >
-          Edit
+          <span aria-hidden="true">✎</span> Change movie
         </button>
       </div>
     );
   }
 
   return (
-    <form action={formAction} className="mt-2" noValidate>
+    <form action={formAction} className="animate-fade-in mt-3" noValidate>
       <label htmlFor="edit-movie" className="sr-only">
         Favorite movie
       </label>
@@ -47,10 +49,10 @@ export function EditMovie({ movie }: { movie: string }) {
         autoFocus
         aria-invalid={Boolean(state.error)}
         aria-describedby={state.error ? "edit-movie-error" : undefined}
-        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-zinc-900 outline-none focus:border-zinc-900 aria-[invalid=true]:border-red-500"
+        className="w-full rounded-xl border-2 border-zinc-200 px-4 py-2.5 text-lg font-semibold text-zinc-900 outline-none transition focus:border-violet-600 focus:ring-4 focus:ring-violet-100 aria-[invalid=true]:border-red-500 aria-[invalid=true]:ring-red-100"
       />
       {state.error && (
-        <p id="edit-movie-error" role="alert" className="mt-2 text-sm text-red-600">
+        <p id="edit-movie-error" role="alert" className="animate-fade-in mt-2 text-sm font-medium text-red-600">
           {state.error}
         </p>
       )}
@@ -58,7 +60,7 @@ export function EditMovie({ movie }: { movie: string }) {
         <button
           type="submit"
           disabled={pending}
-          className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60"
+          className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-violet-600/30 transition hover:bg-violet-700 active:scale-95 disabled:opacity-60"
         >
           {pending ? "Saving…" : "Save"}
         </button>
@@ -66,7 +68,7 @@ export function EditMovie({ movie }: { movie: string }) {
           type="button"
           disabled={pending}
           onClick={() => setEditing(false)}
-          className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-700 ring-1 ring-zinc-300 hover:bg-zinc-100"
+          className="rounded-xl px-4 py-2 text-sm font-semibold text-zinc-700 ring-1 ring-zinc-200 transition hover:bg-zinc-50 active:scale-95"
         >
           Cancel
         </button>
